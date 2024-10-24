@@ -1,7 +1,10 @@
-{
-  "name": "cosmos-sdk-wallet",
+
+  {
+  "name": "unicorn-chain-wallet",
   "version": "1.0.0",
-  "description": "A comprehensive wallet implementation for the Cosmos SDK ecosystem",
+  "description": "A comprehensive wallet implementation for the Unicorn Chain"
+  // ... rest of the package.json stays the same
+}
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
