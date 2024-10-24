@@ -1,0 +1,217 @@
+import { DirectSecp256k1HdWallet } from "@cosmjs/proto-signing";
+import { 
+  GasPrice, 
+  SigningStargateClient,
+  StargateClient,
+  QueryClient,
+  setupStakingExtension,
+  setupGovExtension,
+  setupDistributionExtension
+} from "@cosmjs/stargate";
+import { stringToPath } from "@cosmjs/crypto";
+import { Coin, coin } from "@cosmjs/amino";
+
+// Unicorn Chain Configuration
+const UNICORN_CONFIG = {
+  chainId: "unicorn-1",
+  rpcEndpoint: "https://rpc-unicorn.keplr.app",
+  restEndpoint: "https://lcd-unicorn.keplr.app",
+  prefix: "uni", // Unicorn address prefix
+  denom: "uuni", // Unicorn native token
+  denomCoefficient: 1_000_000, // 1 UNI = 1,000,000 uuni
+  gasPrice: GasPrice.fromString("0.025uuni"),
+  hdPath: "m/44'/118'/0'/0/0" // Standard Cosmos HD path
+};
+
+class UnicornWallet {
+  private wallet: DirectSecp256k1HdWallet | null = null;
+  private client: SigningStargateClient | null = null;
+  private queryClient: QueryClient | null = null;
+  
+  async createWallet(mnemonic?: string) {
+    try {
+      if (mnemonic) {
+        this.wallet = await DirectSecp256k1HdWallet.fromMnemonic(mnemonic, {
+          prefix: UNICORN_CONFIG.prefix,
+          hdPaths: [stringToPath(UNICORN_CONFIG.hdPath)],
+        });
+      } else {
+        this.wallet = await DirectSecp256k1HdWallet.generate(24, {
+          prefix: UNICORN_CONFIG.prefix,
+          hdPaths: [stringToPath(UNICORN_CONFIG.hdPath)],
+        });
+      }
+      
+      const [account] = await this.wallet.getAccounts();
+      return {
+        address: account.address,
+        mnemonic: this.wallet.mnemonic,
+        pubkey: account.pubkey
+      };
+    } catch (error) {
+      throw new Error(`Failed to create Unicorn wallet: ${error}`);
+    }
+  }
+
+  async connectToChain(rpcEndpoint: string = UNICORN_CONFIG.rpcEndpoint) {
+    try {
+      if (!this.wallet) {
+        throw new Error("Wallet not initialized");
+      }
+      
+      this.client = await SigningStargateClient.connectWithSigner(
+        rpcEndpoint,
+        this.wallet,
+        { gasPrice: UNICORN_CONFIG.gasPrice }
+      );
+      
+      const tmClient = await StargateClient.connect(rpcEndpoint);
+      this.queryClient = QueryClient.withExtensions(
+        tmClient,
+        setupStakingExtension,
+        setupGovExtension,
+        setupDistributionExtension
+      );
+      
+      // Verify chain connection
+      const chainId = await this.client.getChainId();
+      if (chainId !== UNICORN_CONFIG.chainId) {
+        throw new Error(`Connected to wrong chain. Expected ${UNICORN_CONFIG.chainId}, got ${chainId}`);
+      }
+      
+      return this.client;
+    } catch (error) {
+      throw new Error(`Failed to connect to Unicorn chain: ${error}`);
+    }
+  }
+
+  // Convert UNI to uuni
+  private convertToBaseUnit(amount: string): string {
+    const parsed = parseFloat(amount);
+    if (isNaN(parsed)) throw new Error("Invalid amount");
+    return Math.floor(parsed * UNICORN_CONFIG.denomCoefficient).toString();
+  }
+
+  // Convert uuni to UNI
+  private convertFromBaseUnit(amount: string): string {
+    const parsed = parseInt(amount);
+    if (isNaN(parsed)) throw new Error("Invalid amount");
+    return (parsed / UNICORN_CONFIG.denomCoefficient).toFixed(6);
+  }
+
+  async getBalance(address: string) {
+    try {
+      if (!this.client) throw new Error("Client not initialized");
+      const balance = await this.client.getBalance(address, UNICORN_CONFIG.denom);
+      return {
+        baseAmount: balance.amount,
+        displayAmount: this.convertFromBaseUnit(balance.amount),
+        denom: balance.denom
+      };
+    } catch (error) {
+      throw new Error(`Failed to get Unicorn balance: ${error}`);
+    }
+  }
+
+  async sendTokens(recipientAddress: string, amount: string) {
+    try {
+      if (!this.client || !this.wallet) {
+        throw new Error("Wallet or client not initialized");
+      }
+      
+      const [sender] = await this.wallet.getAccounts();
+      const baseAmount = this.convertToBaseUnit(amount);
+      
+      return await this.client.sendTokens(
+        sender.address,
+        recipientAddress,
+        [{ amount: baseAmount, denom: UNICORN_CONFIG.denom }],
+        {
+          amount: [{ amount: "5000", denom: UNICORN_CONFIG.denom }],
+          gas: "200000",
+        }
+      );
+    } catch (error) {
+      throw new Error(`Failed to send Unicorn tokens: ${error}`);
+    }
+  }
+
+  async delegate(validatorAddress: string, amount: string) {
+    try {
+      if (!this.client || !this.wallet) {
+        throw new Error("Wallet or client not initialized");
+      }
+      
+      const [delegator] = await this.wallet.getAccounts();
+      const baseAmount = this.convertToBaseUnit(amount);
+      
+      return await this.client.delegateTokens(
+        delegator.address,
+        validatorAddress,
+        coin(baseAmount, UNICORN_CONFIG.denom),
+        {
+          amount: [{ amount: "5000", denom: UNICORN_CONFIG.denom }],
+          gas: "250000",
+        }
+      );
+    } catch (error) {
+      throw new Error(`Failed to delegate Unicorn tokens: ${error}`);
+    }
+  }
+
+  async getValidators() {
+    try {
+      if (!this.queryClient) throw new Error("Query client not initialized");
+      const validators = await this.queryClient.staking.validators("BOND_STATUS_BONDED");
+      
+      return validators.validators.map(validator => ({
+        address: validator.operatorAddress,
+        moniker: validator.description?.moniker || "Unknown",
+        website: validator.description?.website || "",
+        details: validator.description?.details || "",
+        commission: validator.commission?.commissionRates.rate || "0",
+        tokens: this.convertFromBaseUnit(validator.tokens)
+      }));
+    } catch (error) {
+      throw new Error(`Failed to get Unicorn validators: ${error}`);
+    }
+  }
+
+  // Get active proposals
+  async getProposals(status = "PROPOSAL_STATUS_VOTING_PERIOD") {
+    try {
+      if (!this.queryClient) throw new Error("Query client not initialized");
+      const proposals = await this.queryClient.gov.proposals(status);
+      
+      return proposals.proposals.map(proposal => ({
+        id: proposal.proposalId,
+        title: proposal.content?.title || "",
+        description: proposal.content?.description || "",
+        status: proposal.status,
+        finalTallyResult: proposal.finalTallyResult,
+        submitTime: proposal.submitTime,
+        depositEndTime: proposal.depositEndTime,
+        votingEndTime: proposal.votingEndTime
+      }));
+    } catch (error) {
+      throw new Error(`Failed to get Unicorn proposals: ${error}`);
+    }
+  }
+
+  // Get rewards for an address
+  async getRewardsForAddress(address: string) {
+    try {
+      if (!this.queryClient) throw new Error("Query client not initialized");
+      const rewards = await this.queryClient.distribution.delegationTotalRewards(address);
+      
+      return rewards.total.map(reward => ({
+        denom: reward.denom,
+        amount: this.convertFromBaseUnit(reward.amount)
+      }));
+    } catch (error) {
+      throw new Error(`Failed to get Unicorn rewards: ${error}`);
+    }
+  }
+}
+
+export default UnicornWallet;
