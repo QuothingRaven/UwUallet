@@ -1,0 +1,75 @@
+import { UnicornWallet } from '../src';
+
+describe('UnicornWallet', () => {
+  let wallet: UnicornWallet;
+  
+  beforeEach(() => {
+    wallet = new UnicornWallet();
+  });
+
+  describe('Wallet Creation', () => {
+    it('should create a new wallet with mnemonic', async () => {
+      const walletInfo = await wallet.createWallet();
+      
+      expect(walletInfo.address).toMatch(/^uni1/);
+      expect(walletInfo.mnemonic.split(' ')).toHaveLength(24);
+      expect(walletInfo.pubkey).toBeDefined();
+    });
+
+    it('should import wallet from existing mnemonic', async () => {
+      const mnemonic = 'your test mnemonic here ...'; // Add your test mnemonic
+      const walletInfo = await wallet.createWallet(mnemonic);
+      
+      expect(walletInfo.address).toMatch(/^uni1/);
+      expect(walletInfo.mnemonic).toBe(mnemonic);
+    });
+  });
+
+  describe('Chain Connection', () => {
+    it('should connect to Unicorn chain', async () => {
+      const walletInfo = await wallet.createWallet();
+      const client = await wallet.connectToChain();
+      
+      const chainId = await client.getChainId();
+      expect(chainId).toBe('unicorn-1');
+    });
+  });
+
+  describe('Balance Operations', () => {
+    it('should get wallet balance', async () => {
+      const walletInfo = await wallet.createWallet();
+      await wallet.connectToChain();
+      
+      const balance = await wallet.getBalance(walletInfo.address);
+      expect(balance).toHaveProperty('baseAmount');
+      expect(balance).toHaveProperty('displayAmount');
+      expect(balance.denom).toBe('uuni');
+    });
+  });
+
+  describe('Staking Operations', () => {
+    it('should get list of validators', async () => {
+      await wallet.connectToChain();
+      
+      const validators = await wallet.getValidators();
+      expect(validators.length).toBeGreaterThan(0);
+      expect(validators[0]).toHaveProperty('address');
+      expect(validators[0]).toHaveProperty('moniker');
+      expect(validators[0]).toHaveProperty('commission');
+    });
+  });
+
+  describe('Governance Operations', () => {
+    it('should get active proposals', async () => {
+      await wallet.connectToChain();
+      
+      const proposals = await wallet.getProposals();
+      expect(Array.isArray(proposals)).toBe(true);
+      if (proposals.length > 0) {
+        expect(proposals[0]).toHaveProperty('id');
+        expect(proposals[0]).toHaveProperty('title');
+        expect(proposals[0]).toHaveProperty('status');
+      }
+    });
+  });
+});
